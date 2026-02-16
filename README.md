@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/img/main.png" alt="Krenk CLI" width="700" />
+  <img src="https://raw.githubusercontent.com/devkkxingh/krenk/main/public/img/main.png" alt="Krenk CLI" width="700" />
 </p>
 
 # Krenk
