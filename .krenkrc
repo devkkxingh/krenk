@@ -1,0 +1,22 @@
+{
+  "maxParallelAgents": 3,
+  "claudePath": "claude",
+  "workflow": [
+    "plan",
+    "design",
+    "architect",
+    "code",
+    "test",
+    "review",
+    "docs"
+  ],
+  "skipStages": [],
+  "agents": {
+    "builder": {
+      "maxTurns": 100
+    },
+    "guardian": {
+      "maxTurns": 50
+    }
+  }
+}
