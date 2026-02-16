@@ -7,19 +7,33 @@
   "bin": {
     "krenk": "./bin/krenk.js"
   },
+  "files": [
+    "dist",
+    "bin",
+    "public",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/krishna/krenk"
+  },
+  "author": "Krishna",
   "keywords": [
     "cli",
     "claude",
+    "claude-code",
     "ai",
     "agents",
     "orchestrator",
-    "multi-agent"
+    "multi-agent",
+    "software-engineering"
   ],
   "license": "MIT",
   "dependencies": {
