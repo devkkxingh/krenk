@@ -75,6 +75,12 @@ Not every project needs all 11. Krenk lets you pick your team:
 - Node.js >= 20
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 
+### Install via npm
+
+```bash
+npm install -g krenk
+```
+
 ### Install from source
 
 ```bash
