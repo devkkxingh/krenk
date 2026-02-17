@@ -6,6 +6,8 @@ export interface AgentRole {
   systemPrompt: string;
   allowedTools: string[];
   disallowedTools?: string[];
+  /** Model to use: 'sonnet' (fast, default), 'opus' (powerful), 'haiku' (fastest) */
+  model?: string;
 }
 
 // Common shared memory instructions injected into all agent system prompts

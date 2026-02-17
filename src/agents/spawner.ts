@@ -10,6 +10,7 @@ export interface SpawnOptions {
   allowedTools?: string[];
   disallowedTools?: string[];
   context?: string;
+  model?: string;
 }
 
 export interface AgentResult {
@@ -86,6 +87,10 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
     '--dangerously-skip-permissions',
   ];
 
+  if (opts.model) {
+    args.push('--model', opts.model);
+  }
+
   if (opts.systemPrompt) {
     args.push('--system-prompt', opts.systemPrompt);
   }
@@ -144,6 +149,15 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
   child.on('close', (code) => {
     activeChildren.delete(child);
     const duration = Math.round((Date.now() - startTime) / 1000);
+
+    // Log stderr on failure to help debug
+    if (code !== 0 && stderr.trim()) {
+      emitter.emit('data', JSON.stringify({
+        type: 'system',
+        message: `[${opts.role}] stderr: ${stderr.trim().slice(0, 500)}`,
+      }));
+    }
+
     const result: AgentResult = {
       role: opts.role,
       output: stdout,

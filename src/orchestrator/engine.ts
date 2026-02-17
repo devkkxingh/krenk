@@ -37,10 +37,11 @@ export interface EngineOptions {
   skipStages: string[];
   noUi: boolean;
   supervised: boolean;
-  agentConfig?: Record<string, { maxTurns?: number }>;
+  agentConfig?: Record<string, { maxTurns?: number; model?: string }>;
   supervisorLimits?: Partial<SupervisorLimits>;
   resumeRunId?: string;
   resumeCompletedStages?: string[];
+  isNewProject?: boolean;
 }
 
 export interface EngineState {
@@ -167,13 +168,17 @@ export class OrchestrationEngine extends EventEmitter {
       await this.context.saveStateToHistory(state);
     };
 
+    const newProjectHint = this.opts.isNewProject
+      ? '\n\nIMPORTANT: This is a NEW project. Do NOT search or read any existing files. Create your plan purely from the requirements above.'
+      : '';
+
     try {
       // ── Stage 1: Business Analysis ──────────────────────────
       if (!this.shouldSkip('analyzing') && !resumeCompleted.has('analyzing')) {
         this.setStage('analyzing');
         const result = await this.runDirectedAgent(
           'analyst',
-          `Analyze the following request and produce detailed user stories, acceptance criteria, and priorities:\n\n${userPrompt}`
+          `Analyze the following request and produce detailed user stories, acceptance criteria, and priorities:\n\n${userPrompt}${newProjectHint}`
         );
         await this.context.save('analyst', result.output);
         stageCount++;
@@ -187,8 +192,8 @@ export class OrchestrationEngine extends EventEmitter {
 
         const analysisContext = this.context.get('analyst');
         const planPrompt = analysisContext
-          ? `${userPrompt}\n\nBusiness Analysis:\n${analysisContext}`
-          : userPrompt;
+          ? `${userPrompt}\n\nBusiness Analysis:\n${analysisContext}${newProjectHint}`
+          : `${userPrompt}${newProjectHint}`;
 
         const planResult = await this.runDirectedAgent('strategist', planPrompt);
         await this.context.save('strategist', planResult.output);
@@ -473,6 +478,7 @@ export class OrchestrationEngine extends EventEmitter {
         systemPrompt: builderRole.systemPrompt,
         cwd: this.opts.cwd,
         maxTurns: this.opts.agentConfig?.builder?.maxTurns || 50,
+        model: builderRole.model,
         allowedTools: builderRole.allowedTools,
         context: contextStr,
       }));
@@ -585,7 +591,17 @@ export class OrchestrationEngine extends EventEmitter {
         ? `${prevContext}\n\n${sharedContext}`
         : sharedContext;
       const baseRole = role.replace(/-\d+$/, '');
-      const maxTurns = this.opts.agentConfig?.[baseRole]?.maxTurns || 50;
+      const agentCfg = this.opts.agentConfig?.[baseRole];
+      const maxTurns = agentCfg?.maxTurns || 50;
+      const model = agentCfg?.model || roleDef.model;
+
+      // For new projects: restrict file-reading tools on planning agents
+      let allowedTools = roleDef.allowedTools;
+      let disallowedTools = roleDef.disallowedTools;
+      if (this.opts.isNewProject && ['analyst', 'strategist'].includes(baseRole)) {
+        allowedTools = ['WebSearch', 'WebFetch'];
+        disallowedTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'NotebookEdit'];
+      }
 
       const emitter = spawnClaudeAgent({
         role,
@@ -593,8 +609,9 @@ export class OrchestrationEngine extends EventEmitter {
         systemPrompt: roleDef.systemPrompt,
         cwd: this.opts.cwd,
         maxTurns,
-        allowedTools: roleDef.allowedTools,
-        disallowedTools: roleDef.disallowedTools,
+        model,
+        allowedTools,
+        disallowedTools,
         context: contextStr,
       });
 

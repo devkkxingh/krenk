@@ -3,7 +3,7 @@ export interface KrenkConfig {
   claudePath: string;
   workflow: string[];
   skipStages: string[];
-  agents: Record<string, { maxTurns?: number }>;
+  agents: Record<string, { maxTurns?: number; model?: string }>;
 }
 
 export const DEFAULT_CONFIG: KrenkConfig = {

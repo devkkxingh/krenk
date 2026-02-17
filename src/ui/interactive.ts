@@ -587,6 +587,20 @@ function refinePromptLocal(
 export async function startInteractiveSession(): Promise<void> {
   printBanner();
 
+  // Step 0: New or existing project
+  console.log(chalk.bold.white('  Project type:'));
+  console.log(chalk.dim('  (use arrow keys, press enter to select)\n'));
+
+  const projectTypeItems = [
+    { label: 'New project', description: 'Start fresh -- agents will not search existing files' },
+    { label: 'Existing project', description: 'Agents will read and build on top of current codebase' },
+  ];
+
+  const projectTypeIndex = await arrowSelect(projectTypeItems);
+  const isNewProject = projectTypeIndex === 0;
+
+  console.log();
+
   // Step 1: Team selection with arrow keys
   console.log(chalk.bold.white('  Select your team:'));
   console.log(chalk.dim('  (use arrow keys, press enter to select)\n'));
@@ -703,6 +717,7 @@ export async function startInteractiveSession(): Promise<void> {
     lines.push(chalk.dim(`    ${refined.techStack.join(' + ')}`));
     lines.push('');
   }
+  lines.push(chalk.dim(`  Project: ${isNewProject ? 'New' : 'Existing'}`));
   lines.push(chalk.dim(`  Team: ${teamNames}`));
   lines.push(chalk.dim(`  Mode: ${supervised ? 'Supervised' : 'Autonomous'}`));
 
@@ -726,6 +741,7 @@ export async function startInteractiveSession(): Promise<void> {
     noUi: false,
     supervised,
     agentConfig: config.agents,
+    isNewProject,
   });
 
   const renderer = new TerminalRenderer(engine);

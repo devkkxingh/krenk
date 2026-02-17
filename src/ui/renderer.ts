@@ -138,6 +138,7 @@ export class TerminalRenderer {
   private latestStats: ProcessStats[] = [];
   private killedAgents: { role: string; pid: number; reason: string }[] = [];
   private lastRealUpdate: Map<string, number> = new Map();
+  private lastAgentOutput: Map<string, string> = new Map();
 
   constructor(engine: OrchestrationEngine) {
     this.engine = engine;
@@ -244,9 +245,21 @@ export class TerminalRenderer {
     console.log();
     console.log(chalk.bold.hex('#A78BFA')(`  -- Approval Required --`));
     console.log();
-    console.log(chalk.white(`  Agent:  ${emoji} ${chalk.bold(name)}`));
+    console.log(chalk.white(`  Next:   ${emoji} ${chalk.bold(name)}`));
     console.log(chalk.dim(`          ${desc}`));
     console.log(chalk.dim(`  Tools:  ${tools.join(', ')}`));
+
+    // Show what the previous agent produced so user can make an informed decision
+    const prevOutput = this.findPreviousOutput(role);
+    if (prevOutput) {
+      console.log();
+      console.log(chalk.hex(THEME.secondary)(`  Previous output preview:`));
+      const preview = this.extractPreview(prevOutput, 8);
+      for (const line of preview) {
+        console.log(chalk.dim(`    ${line}`));
+      }
+    }
+
     console.log();
 
     const options = ['Approve', 'Skip', 'Abort'] as const;
@@ -548,14 +561,25 @@ export class TerminalRenderer {
       this.spinners.delete(role);
     }
 
-    // Show a brief summary of what the agent produced
+    // Store output for showing in approval prompts
+    if (result.output) {
+      this.lastAgentOutput.set(role, result.output);
+    }
+
+    // Show output preview after agent completes
     if (result.success && result.output) {
-      const summary = this.extractSummary(result.output);
-      if (summary.length > 0) {
-        console.log(chalk.dim('  Summary:'));
-        for (const line of summary) {
-          console.log(chalk.dim(`    ${line}`));
+      const baseRole = role.replace(/-\d+$/, '');
+      // For strategist/analyst: show more since users need to see the plan
+      const maxLines = (baseRole === 'strategist' || baseRole === 'analyst') ? 15 : 8;
+      const preview = this.extractPreview(result.output, maxLines);
+      if (preview.length > 0) {
+        console.log();
+        console.log(chalk.hex(THEME.secondary)('  Output:'));
+        for (const line of preview) {
+          console.log(chalk.white(`    ${line}`));
         }
+        console.log(chalk.dim(`    ... (full output saved to .krenk/${baseRole}.md)`));
+        console.log();
       }
     }
 
@@ -719,39 +743,75 @@ export class TerminalRenderer {
   }
 
   /**
-   * Extract a short summary from agent output.
-   * Looks for headings, bullet points, or key lines to surface.
+   * Extract a meaningful preview from agent output.
+   * Shows headings, key bullets, and skips generic fluff.
    */
-  private extractSummary(output: string): string[] {
-    const lines = output.split('\n').map((l) => l.trim()).filter(Boolean);
-    const summary: string[] = [];
+  private extractPreview(output: string, maxLines: number): string[] {
+    const lines = output.split('\n');
+    const preview: string[] = [];
 
-    // Collect headings (## or ###) and first-level bullets
-    for (const line of lines) {
-      if (summary.length >= 5) break;
+    // Skip generic intro lines
+    const skipPatterns = [
+      /^(here'?s|the|this is|below|i'?ll|let me|ready for)/i,
+      /^(sure|okay|alright)/i,
+    ];
 
-      // Headings
-      if (/^#{1,3}\s+/.test(line)) {
-        const clean = line.replace(/^#+\s*/, '').slice(0, 80);
-        if (clean && !summary.includes(clean)) {
-          summary.push(clean);
-        }
+    for (const raw of lines) {
+      if (preview.length >= maxLines) break;
+
+      const line = raw.trimEnd();
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      // Skip generic intro sentences
+      if (preview.length === 0 && skipPatterns.some((p) => p.test(trimmed))) {
         continue;
       }
 
-      // Top-level bullets (- or *)
-      if (/^[-*]\s+/.test(line) && summary.length < 5) {
-        const clean = line.replace(/^[-*]\s+/, '').slice(0, 80);
-        if (clean) summary.push(clean);
+      // Headings — always include
+      if (/^#{1,4}\s+/.test(trimmed)) {
+        preview.push(trimmed.slice(0, 90));
+        continue;
+      }
+
+      // Bullets and numbered items — include
+      if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) {
+        preview.push(trimmed.slice(0, 90));
+        continue;
+      }
+
+      // ASSIGN sections — important for strategist
+      if (/^###?\s*ASSIGN/i.test(trimmed)) {
+        preview.push(trimmed.slice(0, 90));
+        continue;
+      }
+
+      // Regular text — include if short enough and meaningful
+      if (trimmed.length > 5 && trimmed.length < 120) {
+        preview.push(trimmed.slice(0, 90));
       }
     }
 
-    // Fallback: if no structure found, take the first non-empty line
-    if (summary.length === 0 && lines.length > 0) {
-      summary.push(lines[0].slice(0, 100));
-    }
+    return preview;
+  }
 
-    return summary;
+  /**
+   * Find the most recent agent's output that ran before the given role.
+   */
+  private findPreviousOutput(role: string): string | null {
+    const order = [
+      'analyst', 'strategist', 'designer', 'architect', 'builder',
+      'qa', 'guardian', 'sentinel', 'security', 'scribe', 'devops',
+    ];
+    const baseRole = role.replace(/-\d+$/, '');
+    const idx = order.indexOf(baseRole);
+
+    // Walk backwards to find the last agent that has output
+    for (let i = idx - 1; i >= 0; i--) {
+      const output = this.lastAgentOutput.get(order[i]);
+      if (output) return output;
+    }
+    return null;
   }
 
   private printProgress(): void {
