@@ -78,7 +78,7 @@ Not every project needs all 11. Krenk lets you pick your team:
 ### Install from source
 
 ```bash
-git clone https://github.com/yourusername/krenk.git
+git clone https://github.com/devkkxingh/krenk.git
 cd krenk
 npm install
 npm run build
