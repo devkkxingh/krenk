@@ -80,19 +80,33 @@ const ALL_AGENTS = [
 
 // ── Arrow-key menu ─────────────────────────────────────────
 
+/** Track how many terminal lines the last render actually used */
+let lastRenderedLines = 0;
+
 function renderMenu(
   items: { label: string; description: string }[],
   selected: number,
   multi?: boolean,
   checked?: Set<number>,
 ): void {
+  const cols = process.stdout.columns || 80;
+  lastRenderedLines = 0;
+
   for (let i = 0; i < items.length; i++) {
     const isSelected = i === selected;
     const pointer = isSelected ? chalk.hex(THEME.primary)('>') : ' ';
     const label = isSelected
       ? chalk.bold.white(items[i].label.padEnd(14))
       : chalk.white(items[i].label.padEnd(14));
-    const desc = chalk.dim(items[i].description);
+
+    // Truncate description to prevent line wrapping
+    const prefix = multi ? '    X [x]  ' : '    X '; // measure raw prefix width
+    const labelRaw = items[i].label.padEnd(14);
+    const availableForDesc = cols - prefix.length - labelRaw.length - 2;
+    const descText = availableForDesc > 10
+      ? items[i].description.slice(0, availableForDesc)
+      : items[i].description.slice(0, 30);
+    const desc = chalk.dim(descText);
 
     let check = '';
     if (multi && checked) {
@@ -102,13 +116,17 @@ function renderMenu(
     }
 
     process.stdout.write(`    ${pointer}${check} ${label} ${desc}\n`);
+    lastRenderedLines++;
   }
 }
 
-function clearMenu(count: number): void {
-  for (let i = 0; i < count; i++) {
-    process.stdout.write('\x1b[1A\x1b[2K');
+function clearMenu(count?: number): void {
+  const lines = count ?? lastRenderedLines;
+  // Move up and clear each line, then clear everything below
+  for (let i = 0; i < lines; i++) {
+    process.stdout.write('\x1b[1A');
   }
+  process.stdout.write('\x1b[0J');
 }
 
 /**
@@ -139,14 +157,14 @@ export function arrowSelect(
       // Up arrow
       if (str === '\x1b[A' && selected > 0) {
         selected--;
-        clearMenu(items.length);
+        clearMenu();
         renderMenu(items, selected);
       }
 
       // Down arrow
       if (str === '\x1b[B' && selected < items.length - 1) {
         selected++;
-        clearMenu(items.length);
+        clearMenu();
         renderMenu(items, selected);
       }
 
@@ -155,7 +173,7 @@ export function arrowSelect(
         if (process.stdin.isTTY) process.stdin.setRawMode(wasRaw ?? false);
         process.stdin.pause();
         process.stdin.removeListener('data', onKey);
-        clearMenu(items.length);
+        clearMenu();
         // Re-render with final selection highlighted
         const item = items[selected];
         console.log(`    ${chalk.hex(THEME.primary)('>')} ${chalk.bold.white(item.label)}`);
@@ -195,13 +213,13 @@ function arrowMultiSelect(
 
       if (str === '\x1b[A' && selected > 0) {
         selected--;
-        clearMenu(items.length);
+        clearMenu();
         renderMenu(items, selected, true, checked);
       }
 
       if (str === '\x1b[B' && selected < items.length - 1) {
         selected++;
-        clearMenu(items.length);
+        clearMenu();
         renderMenu(items, selected, true, checked);
       }
 
@@ -212,7 +230,7 @@ function arrowMultiSelect(
         } else {
           checked.add(selected);
         }
-        clearMenu(items.length);
+        clearMenu();
         renderMenu(items, selected, true, checked);
       }
 
@@ -221,7 +239,7 @@ function arrowMultiSelect(
         if (process.stdin.isTTY) process.stdin.setRawMode(wasRaw ?? false);
         process.stdin.pause();
         process.stdin.removeListener('data', onKey);
-        clearMenu(items.length);
+        clearMenu();
         // Show final selections
         const picks = Array.from(checked).sort();
         if (picks.length > 0) {
