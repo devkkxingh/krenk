@@ -7,6 +7,7 @@ import { testCommand } from './commands/test.js';
 import { reviewCommand } from './commands/review.js';
 import { initCommand } from './commands/init.js';
 import { statusCommand } from './commands/status.js';
+import { resumeCommand } from './commands/resume.js';
 import { startInteractiveSession } from './ui/interactive.js';
 
 program
@@ -15,9 +16,13 @@ program
     'Multi-agent software engineering orchestrator powered by Claude Code'
   )
   .version('0.1.0')
-  .action(async () => {
-    // No subcommand provided — launch interactive session
-    await startInteractiveSession();
+  .option('--resume', 'Resume a previous interrupted or failed run')
+  .action(async (opts: { resume?: boolean }) => {
+    if (opts.resume) {
+      await resumeCommand();
+    } else {
+      await startInteractiveSession();
+    }
   });
 
 program

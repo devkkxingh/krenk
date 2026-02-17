@@ -338,7 +338,7 @@ export class TerminalRenderer {
     this.engine.on('output', ({ role, text }: { role: string; text: string }) =>
       this.onAgentOutput(role, text)
     );
-    this.engine.on('agent:done', ({ role, result }: { role: string; result: { success: boolean; duration: number } }) =>
+    this.engine.on('agent:done', ({ role, result }: { role: string; result: { success: boolean; duration: number; output?: string } }) =>
       this.onAgentDone(role, result)
     );
     this.engine.on('agent:error', ({ role, error }: { role: string; error: Error }) =>
@@ -519,7 +519,7 @@ export class TerminalRenderer {
     }
   }
 
-  private onAgentDone(role: string, result: { success: boolean; duration: number }): void {
+  private onAgentDone(role: string, result: { success: boolean; duration: number; output?: string }): void {
     // Stop phase timer
     const timer = this.phaseTimers.get(role);
     if (timer) {
@@ -546,6 +546,17 @@ export class TerminalRenderer {
         spinner.fail(`${emoji} ${name} failed (${result.duration}s)`);
       }
       this.spinners.delete(role);
+    }
+
+    // Show a brief summary of what the agent produced
+    if (result.success && result.output) {
+      const summary = this.extractSummary(result.output);
+      if (summary.length > 0) {
+        console.log(chalk.dim('  Summary:'));
+        for (const line of summary) {
+          console.log(chalk.dim(`    ${line}`));
+        }
+      }
     }
 
     // Stage progress bar (only for main stages, not sub-builders)
@@ -705,6 +716,42 @@ export class TerminalRenderer {
       clearInterval(timer);
       this.phaseTimers.delete(role);
     }
+  }
+
+  /**
+   * Extract a short summary from agent output.
+   * Looks for headings, bullet points, or key lines to surface.
+   */
+  private extractSummary(output: string): string[] {
+    const lines = output.split('\n').map((l) => l.trim()).filter(Boolean);
+    const summary: string[] = [];
+
+    // Collect headings (## or ###) and first-level bullets
+    for (const line of lines) {
+      if (summary.length >= 5) break;
+
+      // Headings
+      if (/^#{1,3}\s+/.test(line)) {
+        const clean = line.replace(/^#+\s*/, '').slice(0, 80);
+        if (clean && !summary.includes(clean)) {
+          summary.push(clean);
+        }
+        continue;
+      }
+
+      // Top-level bullets (- or *)
+      if (/^[-*]\s+/.test(line) && summary.length < 5) {
+        const clean = line.replace(/^[-*]\s+/, '').slice(0, 80);
+        if (clean) summary.push(clean);
+      }
+    }
+
+    // Fallback: if no structure found, take the first non-empty line
+    if (summary.length === 0 && lines.length > 0) {
+      summary.push(lines[0].slice(0, 100));
+    }
+
+    return summary;
   }
 
   private printProgress(): void {

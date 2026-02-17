@@ -28,9 +28,9 @@ export interface SupervisorLimits {
 
 const DEFAULT_LIMITS: SupervisorLimits = {
   maxMemoryMB: 512,
-  maxTimeSeconds: 600,
-  hungWarningSeconds: 120,
-  hungKillSeconds: 300,
+  maxTimeSeconds: 900,
+  hungWarningSeconds: 180,
+  hungKillSeconds: 480,
   pollIntervalMs: 5000,
 };
 

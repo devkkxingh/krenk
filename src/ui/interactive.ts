@@ -114,7 +114,7 @@ function clearMenu(count: number): void {
 /**
  * Single-select arrow-key menu. Returns the chosen index.
  */
-function arrowSelect(
+export function arrowSelect(
   items: { label: string; description: string }[],
 ): Promise<number> {
   return new Promise((resolve) => {

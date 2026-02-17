@@ -20,6 +20,17 @@ import { ProcessSupervisor, type SupervisorLimits } from './supervisor.js';
 import { parsePlan, getAgentTask, type ParsedPlan } from './plan-parser.js';
 import { MasterBrain } from './brain.js';
 
+export interface PersistedState {
+  prompt: string;
+  completedStages: string[];
+  skipStages: string[];
+  status: 'running' | 'complete' | 'failed';
+  runId: string;
+  stageCount: number;
+  duration: number;
+  planAssignments: string[];
+}
+
 export interface EngineOptions {
   cwd: string;
   maxParallel: number;
@@ -28,6 +39,8 @@ export interface EngineOptions {
   supervised: boolean;
   agentConfig?: Record<string, { maxTurns?: number }>;
   supervisorLimits?: Partial<SupervisorLimits>;
+  resumeRunId?: string;
+  resumeCompletedStages?: string[];
 }
 
 export interface EngineState {
@@ -70,7 +83,7 @@ export class OrchestrationEngine extends EventEmitter {
   constructor(opts: EngineOptions) {
     super();
     this.opts = opts;
-    this.context = new ContextManager(opts.cwd);
+    this.context = new ContextManager(opts.cwd, opts.resumeRunId);
     this.scheduler = new Scheduler(opts.maxParallel);
     this.registry = new AgentRegistry();
     this.supervisor = new ProcessSupervisor(opts.supervisorLimits);
@@ -124,10 +137,39 @@ export class OrchestrationEngine extends EventEmitter {
     this._startTime = Date.now();
     let stageCount = 0;
     let plan: ParsedPlan | null = null;
+    const completedStages: string[] = [];
+    const resumeCompleted = new Set(this.opts.resumeCompletedStages || []);
+    const isResume = resumeCompleted.size > 0;
+
+    // On resume: load previous outputs into memory
+    if (isResume && this.opts.resumeRunId) {
+      await this.context.loadFromHistory(this.opts.resumeRunId);
+
+      // Re-parse plan from strategist output if available
+      const strategistOutput = this.context.get('strategist');
+      if (strategistOutput) {
+        plan = parsePlan(strategistOutput);
+        this.brain.setPlan(plan);
+      }
+    }
+
+    const saveProgress = async (status: 'running' | 'complete' | 'failed') => {
+      const state: PersistedState = {
+        prompt: userPrompt,
+        completedStages,
+        skipStages: this.opts.skipStages,
+        status,
+        runId: this.context.getRunId(),
+        stageCount,
+        duration: Math.round((Date.now() - this._startTime) / 1000),
+        planAssignments: plan ? Array.from(plan.assignments.keys()) : [],
+      };
+      await this.context.saveStateToHistory(state);
+    };
 
     try {
       // ── Stage 1: Business Analysis ──────────────────────────
-      if (!this.shouldSkip('analyzing')) {
+      if (!this.shouldSkip('analyzing') && !resumeCompleted.has('analyzing')) {
         this.setStage('analyzing');
         const result = await this.runDirectedAgent(
           'analyst',
@@ -135,10 +177,12 @@ export class OrchestrationEngine extends EventEmitter {
         );
         await this.context.save('analyst', result.output);
         stageCount++;
+        completedStages.push('analyzing');
+        await saveProgress('running');
       }
 
       // ── Stage 2: Planning (MASTER PLAN) ─────────────────────
-      if (!this.shouldSkip('planning')) {
+      if (!this.shouldSkip('planning') && !resumeCompleted.has('planning')) {
         this.setStage('planning');
 
         const analysisContext = this.context.get('analyst');
@@ -149,6 +193,7 @@ export class OrchestrationEngine extends EventEmitter {
         const planResult = await this.runDirectedAgent('strategist', planPrompt);
         await this.context.save('strategist', planResult.output);
         stageCount++;
+        completedStages.push('planning');
 
         // Parse the plan → Director gets the master plan
         plan = parsePlan(planResult.output);
@@ -161,10 +206,12 @@ export class OrchestrationEngine extends EventEmitter {
           assignments: Array.from(plan.assignments.keys()),
           modules: plan.modules.length,
         });
+
+        await saveProgress('running');
       }
 
       // ── Stage 3: Design ─────────────────────────────────────
-      if (!this.shouldSkip('designing') && this.needsDesign()) {
+      if (!this.shouldSkip('designing') && !resumeCompleted.has('designing') && this.needsDesign()) {
         this.setStage('designing');
         const prompt = plan
           ? getAgentTask(plan, 'designer', userPrompt)
@@ -172,10 +219,12 @@ export class OrchestrationEngine extends EventEmitter {
         const result = await this.runDirectedAgent('designer', prompt);
         await this.context.save('designer', result.output);
         stageCount++;
+        completedStages.push('designing');
+        await saveProgress('running');
       }
 
       // ── Stage 4: Architecture ───────────────────────────────
-      if (!this.shouldSkip('architecting')) {
+      if (!this.shouldSkip('architecting') && !resumeCompleted.has('architecting')) {
         this.setStage('architecting');
         const prompt = plan
           ? getAgentTask(plan, 'architect', userPrompt)
@@ -183,6 +232,7 @@ export class OrchestrationEngine extends EventEmitter {
         const result = await this.runDirectedAgent('architect', prompt);
         await this.context.save('architect', result.output);
         stageCount++;
+        completedStages.push('architecting');
 
         // Update modules from architect output
         if (plan) {
@@ -191,20 +241,24 @@ export class OrchestrationEngine extends EventEmitter {
             plan.modules = archModules;
           }
         }
+
+        await saveProgress('running');
       }
 
       // ── Stage 5: Coding (phased for builder) ────────────────
-      if (!this.shouldSkip('coding')) {
+      if (!this.shouldSkip('coding') && !resumeCompleted.has('coding')) {
         this.setStage('coding');
         const prompt = plan
           ? getAgentTask(plan, 'builder', userPrompt)
           : userPrompt;
         await this.runCodingStage(prompt, plan);
         stageCount++;
+        completedStages.push('coding');
+        await saveProgress('running');
       }
 
       // ── Stage 6: QA Planning ────────────────────────────────
-      if (!this.shouldSkip('qa-planning')) {
+      if (!this.shouldSkip('qa-planning') && !resumeCompleted.has('qa-planning')) {
         this.setStage('qa-planning');
         const prompt = plan
           ? getAgentTask(plan, 'qa', 'Create a comprehensive test strategy and detailed test plans.')
@@ -212,10 +266,12 @@ export class OrchestrationEngine extends EventEmitter {
         const result = await this.runDirectedAgent('qa', prompt);
         await this.context.save('qa', result.output);
         stageCount++;
+        completedStages.push('qa-planning');
+        await saveProgress('running');
       }
 
       // ── Stage 7: Testing ────────────────────────────────────
-      if (!this.shouldSkip('testing')) {
+      if (!this.shouldSkip('testing') && !resumeCompleted.has('testing')) {
         this.setStage('testing');
         const prompt = plan
           ? getAgentTask(plan, 'guardian', 'Write and run comprehensive tests.')
@@ -223,10 +279,12 @@ export class OrchestrationEngine extends EventEmitter {
         const result = await this.runDirectedAgent('guardian', prompt);
         await this.context.save('guardian', result.output);
         stageCount++;
+        completedStages.push('testing');
+        await saveProgress('running');
       }
 
       // ── Stage 8: Code Review ────────────────────────────────
-      if (!this.shouldSkip('reviewing')) {
+      if (!this.shouldSkip('reviewing') && !resumeCompleted.has('reviewing')) {
         this.setStage('reviewing');
         const prompt = plan
           ? getAgentTask(plan, 'sentinel', 'Review all code for bugs, security issues, and quality.')
@@ -234,6 +292,7 @@ export class OrchestrationEngine extends EventEmitter {
         const review = await this.runDirectedAgent('sentinel', prompt);
         await this.context.save('sentinel', review.output);
         stageCount++;
+        completedStages.push('reviewing');
 
         // Revision loop
         if (
@@ -250,10 +309,12 @@ export class OrchestrationEngine extends EventEmitter {
           await this.context.save('builder', fix.output);
           stageCount++;
         }
+
+        await saveProgress('running');
       }
 
       // ── Stage 9: Security Audit ─────────────────────────────
-      if (!this.shouldSkip('securing')) {
+      if (!this.shouldSkip('securing') && !resumeCompleted.has('securing')) {
         this.setStage('securing');
         const prompt = plan
           ? getAgentTask(plan, 'security', 'Perform a thorough security audit.')
@@ -261,6 +322,7 @@ export class OrchestrationEngine extends EventEmitter {
         const secAudit = await this.runDirectedAgent('security', prompt);
         await this.context.save('security', secAudit.output);
         stageCount++;
+        completedStages.push('securing');
 
         if (
           secAudit.output.includes('NEEDS_REVISION') &&
@@ -276,10 +338,12 @@ export class OrchestrationEngine extends EventEmitter {
           await this.context.save('builder', fix.output);
           stageCount++;
         }
+
+        await saveProgress('running');
       }
 
       // ── Stage 10: Documentation ─────────────────────────────
-      if (!this.shouldSkip('documenting')) {
+      if (!this.shouldSkip('documenting') && !resumeCompleted.has('documenting')) {
         this.setStage('documenting');
         const prompt = plan
           ? getAgentTask(plan, 'scribe', 'Write comprehensive documentation.')
@@ -287,10 +351,12 @@ export class OrchestrationEngine extends EventEmitter {
         const result = await this.runDirectedAgent('scribe', prompt);
         await this.context.save('scribe', result.output);
         stageCount++;
+        completedStages.push('documenting');
+        await saveProgress('running');
       }
 
       // ── Stage 11: DevOps ────────────────────────────────────
-      if (!this.shouldSkip('deploying')) {
+      if (!this.shouldSkip('deploying') && !resumeCompleted.has('deploying')) {
         this.setStage('deploying');
         const prompt = plan
           ? getAgentTask(plan, 'devops', 'Set up CI/CD, Docker, and deployment.')
@@ -298,25 +364,24 @@ export class OrchestrationEngine extends EventEmitter {
         const result = await this.runDirectedAgent('devops', prompt);
         await this.context.save('devops', result.output);
         stageCount++;
+        completedStages.push('deploying');
+        await saveProgress('running');
       }
 
       this.setStage('complete');
       this.supervisor.stop();
       const duration = Math.round((Date.now() - this._startTime) / 1000);
 
-      await this.context.saveState({
-        stage: 'complete',
-        stageCount,
-        duration,
-        runId: this.context.getRunId(),
-        planAssignments: plan ? Array.from(plan.assignments.keys()) : [],
-      });
+      await saveProgress('complete');
 
       return { success: true, stages: stageCount, duration };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       logger.error(`Engine failed: ${msg}`);
       this.emit('error', error);
+
+      await saveProgress('failed').catch(() => {});
+
       return {
         success: false,
         stages: stageCount,

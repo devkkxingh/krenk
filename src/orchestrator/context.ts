@@ -10,8 +10,8 @@ export class ContextManager {
   private historyDir: string;
   private runId: string;
 
-  constructor(projectDir: string) {
-    this.runId = new Date().toISOString().replace(/[:.]/g, '-');
+  constructor(projectDir: string, existingRunId?: string) {
+    this.runId = existingRunId || new Date().toISOString().replace(/[:.]/g, '-');
     this.krenkDir = path.join(projectDir, '.krenk');
     this.historyDir = path.join(this.krenkDir, 'history', this.runId);
     fs.mkdirSync(this.krenkDir, { recursive: true });
@@ -106,5 +106,58 @@ export class ContextManager {
   /** Get the run ID for this session */
   getRunId(): string {
     return this.runId;
+  }
+
+  /** Load all <role>.md files from a history dir into memory */
+  async loadFromHistory(runId: string): Promise<void> {
+    const histDir = path.join(this.krenkDir, 'history', runId);
+    try {
+      const files = await fs.promises.readdir(histDir);
+      for (const file of files) {
+        if (file.endsWith('.md')) {
+          const role = file.replace(/\.md$/, '');
+          const content = await fs.promises.readFile(
+            path.join(histDir, file),
+            'utf-8'
+          );
+          this.memory.set(role, content);
+        }
+      }
+    } catch {
+      // History dir may not exist for very old runs
+    }
+  }
+
+  /** Save state.json to both .krenk/ and .krenk/history/<runId>/ */
+  async saveStateToHistory(state: Record<string, unknown>): Promise<void> {
+    const json = JSON.stringify(state, null, 2);
+    await Promise.all([
+      fs.promises.writeFile(
+        path.join(this.krenkDir, 'state.json'),
+        json,
+        'utf-8'
+      ),
+      fs.promises.writeFile(
+        path.join(this.historyDir, 'state.json'),
+        json,
+        'utf-8'
+      ),
+    ]);
+  }
+
+  /** Read state.json from a specific history dir */
+  static async loadRunState(
+    projectDir: string,
+    runId: string
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const data = await fs.promises.readFile(
+        path.join(projectDir, '.krenk', 'history', runId, 'state.json'),
+        'utf-8'
+      );
+      return JSON.parse(data);
+    } catch {
+      return null;
+    }
   }
 }
