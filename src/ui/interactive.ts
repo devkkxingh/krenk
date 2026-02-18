@@ -413,28 +413,27 @@ Rules:
         }
       }, 3000);
 
-      // On Windows: pipe prompt via stdin + shell:true to find claude.cmd
-      // On Unix: pass prompt as -p argument directly
-      const spawnArgs = [
-        ...(isWindows ? [] : ['-p', refinementPrompt]),
+      const claudeArgs = [
+        '-p', refinementPrompt,
         '--output-format', 'stream-json',
         '--verbose',
         '--max-turns', '1',
         '--dangerously-skip-permissions',
       ];
 
-      const child = spawnProcess('claude', spawnArgs, {
-        env,
-        cwd: process.cwd(),
-        stdio: [isWindows ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-        ...(isWindows ? { shell: true } : {}),
-      });
-
-      // On Windows, write prompt to stdin then close
-      if (isWindows && child.stdin) {
-        child.stdin.write(refinementPrompt);
-        child.stdin.end();
-      }
+      // Windows: spawn cmd.exe /c claude to resolve .cmd extensions
+      // Unix: spawn claude directly
+      const child = isWindows
+        ? spawnProcess(process.env.ComSpec || 'cmd.exe', ['/c', 'claude', ...claudeArgs], {
+            env,
+            cwd: process.cwd(),
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+        : spawnProcess('claude', claudeArgs, {
+            env,
+            cwd: process.cwd(),
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
 
       let stdout = '';
       let stderr = '';

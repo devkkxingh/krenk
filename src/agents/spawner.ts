@@ -93,22 +93,13 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
     ? `${opts.context}\n\n---\n\nYour current task:\n${opts.prompt}`
     : opts.prompt;
 
-  // Use stdin piping for prompt to avoid shell quoting issues on all platforms.
-  // Claude CLI reads from stdin when `-p -` is used, or we can pipe to it.
-  // We pass `-p` with the prompt directly on Unix (no shell issues),
-  // but on Windows we pipe via stdin to avoid cmd.exe mangling special chars.
-  const args: string[] = [];
-
-  if (!isWindows) {
-    args.push('-p', fullPrompt);
-  }
-
-  args.push(
+  const args = [
+    '-p', fullPrompt,
     '--output-format', 'stream-json',
     '--max-turns', String(opts.maxTurns || 50),
     '--verbose',
     '--dangerously-skip-permissions',
-  );
+  ];
 
   if (opts.model) {
     args.push('--model', opts.model);
@@ -128,20 +119,22 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
 
   const startTime = Date.now();
 
-  const child = spawn('claude', args, {
-    env,
-    cwd: opts.cwd,
-    // Windows: pipe stdin for prompt, shell=true to resolve claude.cmd
-    // Unix: ignore stdin, detached for process group kills
-    stdio: [isWindows ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    ...(isWindows ? { shell: true } : { detached: true }),
-  });
-
-  // On Windows, write the prompt to stdin then close it
-  if (isWindows && child.stdin) {
-    child.stdin.write(fullPrompt);
-    child.stdin.end();
-  }
+  // Windows: spawn cmd.exe directly with /c to run claude.cmd
+  // This is the most reliable way — shell:true and binary resolution both fail
+  // on some Windows setups. Spawning cmd.exe /c always works.
+  // Unix: spawn claude directly with detached process group.
+  const child = isWindows
+    ? spawn(process.env.ComSpec || 'cmd.exe', ['/c', 'claude', ...args], {
+        env,
+        cwd: opts.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    : spawn('claude', args, {
+        env,
+        cwd: opts.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
+      });
 
   emitter.child = child;
   activeChildren.add(child);
