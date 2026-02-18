@@ -1,6 +1,6 @@
 {
   "name": "krenk",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Multi-agent software engineering orchestrator powered by Claude Code",
   "type": "module",
   "main": "dist/index.js",
