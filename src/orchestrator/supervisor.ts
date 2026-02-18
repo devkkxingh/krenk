@@ -1,7 +1,9 @@
 import { EventEmitter } from 'node:events';
-import { execSync } from 'node:child_process';
+import { execSync, spawn as spawnProcess } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { logger } from '../utils/logger.js';
+
+const isWindows = process.platform === 'win32';
 
 export interface ProcessStats {
   pid: number;
@@ -275,30 +277,53 @@ export class ProcessSupervisor extends EventEmitter {
     const result = new Map<number, { memoryMB: number; cpuPercent: number }>();
 
     try {
-      // ps -o pid=,rss=,pcpu= -p <pid1>,<pid2>,...
-      // rss is in KB on both macOS and Linux
-      const pidList = pids.join(',');
-      const output = execSync(`ps -o pid=,rss=,pcpu= -p ${pidList} 2>/dev/null`, {
-        encoding: 'utf-8',
-        timeout: 3000,
-      });
+      if (isWindows) {
+        // Windows: use wmic to get memory for each process
+        const pidFilter = pids.map(p => `ProcessId=${p}`).join(' or ');
+        const output = execSync(
+          `wmic process where "${pidFilter}" get ProcessId,WorkingSetSize /format:csv 2>nul`,
+          { encoding: 'utf-8', timeout: 5000 }
+        );
+        for (const line of output.trim().split('\n')) {
+          const parts = line.trim().split(',');
+          // CSV format: Node,ProcessId,WorkingSetSize
+          if (parts.length >= 3) {
+            const pid = parseInt(parts[1], 10);
+            const bytes = parseInt(parts[2], 10);
+            if (!isNaN(pid) && !isNaN(bytes)) {
+              result.set(pid, {
+                memoryMB: Math.round((bytes / 1024 / 1024) * 10) / 10,
+                cpuPercent: 0, // wmic cpu% is unreliable for snapshots
+              });
+            }
+          }
+        }
+      } else {
+        // Unix: ps -o pid=,rss=,pcpu= -p <pid1>,<pid2>,...
+        // rss is in KB on both macOS and Linux
+        const pidList = pids.join(',');
+        const output = execSync(`ps -o pid=,rss=,pcpu= -p ${pidList} 2>/dev/null`, {
+          encoding: 'utf-8',
+          timeout: 3000,
+        });
 
-      for (const line of output.trim().split('\n')) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 3) {
-          const pid = parseInt(parts[0], 10);
-          const rssKB = parseInt(parts[1], 10);
-          const cpu = parseFloat(parts[2]);
-          if (!isNaN(pid) && !isNaN(rssKB)) {
-            result.set(pid, {
-              memoryMB: Math.round((rssKB / 1024) * 10) / 10,
-              cpuPercent: isNaN(cpu) ? 0 : cpu,
-            });
+        for (const line of output.trim().split('\n')) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 3) {
+            const pid = parseInt(parts[0], 10);
+            const rssKB = parseInt(parts[1], 10);
+            const cpu = parseFloat(parts[2]);
+            if (!isNaN(pid) && !isNaN(rssKB)) {
+              result.set(pid, {
+                memoryMB: Math.round((rssKB / 1024) * 10) / 10,
+                cpuPercent: isNaN(cpu) ? 0 : cpu,
+              });
+            }
           }
         }
       }
     } catch {
-      // ps failed — process may have exited between check and poll
+      // ps/wmic failed — process may have exited between check and poll
     }
 
     return result;
@@ -313,18 +338,26 @@ export class ProcessSupervisor extends EventEmitter {
       reason,
     });
 
-    // Kill the process group
-    try {
-      process.kill(-entry.pid, 'SIGTERM');
-    } catch {
-      try { entry.child.kill('SIGTERM'); } catch { /* already dead */ }
-    }
+    if (isWindows) {
+      try {
+        spawnProcess('taskkill', ['/pid', String(entry.pid), '/T', '/F'], { stdio: 'ignore' });
+      } catch {
+        try { entry.child.kill(); } catch { /* already dead */ }
+      }
+    } else {
+      // Kill the process group
+      try {
+        process.kill(-entry.pid, 'SIGTERM');
+      } catch {
+        try { entry.child.kill('SIGTERM'); } catch { /* already dead */ }
+      }
 
-    // Force kill after 3s
-    setTimeout(() => {
-      try { process.kill(-entry.pid, 'SIGKILL'); } catch { /* already dead */ }
-      try { entry.child.kill('SIGKILL'); } catch { /* already dead */ }
-    }, 3000).unref();
+      // Force kill after 3s
+      setTimeout(() => {
+        try { process.kill(-entry.pid, 'SIGKILL'); } catch { /* already dead */ }
+        try { entry.child.kill('SIGKILL'); } catch { /* already dead */ }
+      }, 3000).unref();
+    }
 
     this.tracked.delete(entry.pid);
   }

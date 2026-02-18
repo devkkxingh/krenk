@@ -1,6 +1,8 @@
 import * as readline from 'node:readline';
 import { spawn as spawnProcess } from 'node:child_process';
 import chalk from 'chalk';
+
+const isWindows = process.platform === 'win32';
 import gradient from 'gradient-string';
 import figlet from 'figlet';
 import boxen from 'boxen';
@@ -420,6 +422,7 @@ Rules:
         env,
         cwd: process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
+        ...(isWindows ? { shell: true } : {}),
       });
 
       let stdout = '';
@@ -453,7 +456,11 @@ Rules:
 
       const timeout = setTimeout(() => {
         clearInterval(phaseTimer);
-        child.kill('SIGTERM');
+        if (isWindows && child.pid) {
+          spawnProcess('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+        } else {
+          child.kill('SIGTERM');
+        }
         reject(new Error('timeout'));
       }, 60000);
 
