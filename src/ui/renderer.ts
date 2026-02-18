@@ -557,6 +557,14 @@ export class TerminalRenderer {
         spinner.succeed(`${emoji} ${name} completed (${result.duration}s)`);
       } else {
         spinner.fail(`${emoji} ${name} failed (${result.duration}s)`);
+        // Log failure details so users can debug
+        if (result.output && result.output.trim()) {
+          const errSnippet = result.output.trim().slice(0, 300);
+          console.log(chalk.yellow(`  Error output: ${errSnippet}`));
+        }
+        if (result.exitCode !== null && result.exitCode !== 0) {
+          console.log(chalk.dim(`  Exit code: ${result.exitCode}. Make sure "claude" CLI is in your PATH.`));
+        }
       }
       this.spinners.delete(role);
     }
@@ -612,6 +620,10 @@ export class TerminalRenderer {
 
     if (spinner) {
       spinner.fail(`${emoji} ${name} error: ${error.message}`);
+      if (error.message.includes('ENOENT')) {
+        console.log(chalk.yellow(`  "claude" command not found. Make sure Claude Code CLI is installed and in your PATH.`));
+        console.log(chalk.dim(`  Install: npm install -g @anthropic-ai/claude-code`));
+      }
       this.spinners.delete(role);
     }
   }

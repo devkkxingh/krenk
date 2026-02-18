@@ -522,8 +522,15 @@ Rules:
       techStack: Array.isArray(parsed.techStack) ? parsed.techStack : [],
       fullPrompt: parsed.fullPrompt || rawTask,
     };
-  } catch {
-    // Fallback: if Claude fails, do basic local refinement
+  } catch (err: unknown) {
+    // Log the error so users can debug (especially on Windows)
+    const msg = err instanceof Error ? err.message : String(err);
+    if (spinner) {
+      spinner.warn('Claude refinement failed, using local fallback');
+    }
+    console.log(chalk.yellow(`  Warning: Claude CLI failed: ${msg}`));
+    console.log(chalk.dim('  Make sure "claude" is installed and available in your PATH.'));
+    console.log(chalk.dim('  On Windows, try running: npx @anthropic-ai/claude-code --version\n'));
     return refinePromptLocal(rawTask, answers, roles);
   }
 }
@@ -592,6 +599,9 @@ function refinePromptLocal(
 // ── Main ────────────────────────────────────────────────────
 
 export async function startInteractiveSession(): Promise<void> {
+  // Clear terminal for a clean start
+  process.stdout.write(isWindows ? '\x1Bc' : '\x1B[2J\x1B[3J\x1B[H');
+
   printBanner();
 
   // Step 0: New or existing project
