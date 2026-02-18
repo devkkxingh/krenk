@@ -1,7 +1,33 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess, execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const isWindows = process.platform === 'win32';
+
+/**
+ * Resolve the full path to the `claude` binary.
+ * On Windows, `spawn('claude')` fails with ENOENT because it can't
+ * find `claude.cmd`. We use `where` / `which` to get the real path.
+ */
+let resolvedClaudePath: string | null = null;
+function getClaudeBinary(): string {
+  if (resolvedClaudePath) return resolvedClaudePath;
+  try {
+    const cmd = isWindows ? 'where claude' : 'which claude';
+    const result = execFileSync(isWindows ? 'cmd' : 'sh',
+      isWindows ? ['/c', cmd] : ['-c', cmd],
+      { encoding: 'utf-8', timeout: 5000 }
+    ).trim();
+    // `where` on Windows can return multiple lines, take the first
+    resolvedClaudePath = result.split('\n')[0].trim();
+    return resolvedClaudePath;
+  } catch {
+    // Fallback — hope it's in PATH
+    return 'claude';
+  }
+}
 
 export interface SpawnOptions {
   role: string;
@@ -93,8 +119,24 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
     ? `${opts.context}\n\n---\n\nYour current task:\n${opts.prompt}`
     : opts.prompt;
 
+  // On Windows, long prompts with special chars break shell argument parsing.
+  // Write prompt and system prompt to temp files and read via stdin / flag.
+  const tempFiles: string[] = [];
+  let promptArg: string[];
+  const tempDir = join(tmpdir(), 'krenk-prompts');
+  mkdirSync(tempDir, { recursive: true });
+
+  if (isWindows) {
+    const promptFile = join(tempDir, `prompt-${opts.role}-${Date.now()}.txt`);
+    writeFileSync(promptFile, fullPrompt, 'utf-8');
+    promptArg = ['-p', `@${promptFile}`];
+    tempFiles.push(promptFile);
+  } else {
+    promptArg = ['-p', fullPrompt];
+  }
+
   const args = [
-    '-p', fullPrompt,
+    ...promptArg,
     '--output-format', 'stream-json',
     '--max-turns', String(opts.maxTurns || 50),
     '--verbose',
@@ -106,7 +148,14 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
   }
 
   if (opts.systemPrompt) {
-    args.push('--system-prompt', opts.systemPrompt);
+    if (isWindows) {
+      const sysFile = join(tempDir, `sys-${opts.role}-${Date.now()}.txt`);
+      writeFileSync(sysFile, opts.systemPrompt, 'utf-8');
+      args.push('--system-prompt', `@${sysFile}`);
+      tempFiles.push(sysFile);
+    } else {
+      args.push('--system-prompt', opts.systemPrompt);
+    }
   }
 
   if (opts.allowedTools?.length) {
@@ -117,15 +166,15 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
     args.push('--disallowedTools', ...opts.disallowedTools);
   }
 
+  const claudeBin = getClaudeBinary();
   const startTime = Date.now();
 
-  const child = spawn('claude', args, {
+  const child = spawn(claudeBin, args, {
     env,
     cwd: opts.cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Windows: shell=true resolves .cmd/.bat extensions (e.g. claude.cmd from npm)
     // Unix: detached=true creates process group for clean tree kills
-    ...(isWindows ? { shell: true } : { detached: true }),
+    ...(isWindows ? {} : { detached: true }),
   });
 
   emitter.child = child;
@@ -164,6 +213,10 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
 
   child.on('close', (code) => {
     activeChildren.delete(child);
+    // Clean up temp files
+    for (const f of tempFiles) {
+      try { unlinkSync(f); } catch { /* ignore */ }
+    }
     const duration = Math.round((Date.now() - startTime) / 1000);
 
     // Log stderr on failure to help debug
