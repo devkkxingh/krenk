@@ -42,11 +42,13 @@
     "cli-table3": "^0.6.5",
     "commander": "^13.1.0",
     "cosmiconfig": "^9.0.0",
+    "cross-spawn": "^7.0.6",
     "figlet": "^1.8.0",
     "gradient-string": "^3.0.0",
     "ora": "^8.2.0"
   },
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/figlet": "^1.7.0",
     "@types/gradient-string": "^1.1.6",
     "@types/node": "^22.13.4",

@@ -1,3 +1,4 @@
+import crossSpawn from 'cross-spawn';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
@@ -93,8 +94,8 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
     ? `${opts.context}\n\n---\n\nYour current task:\n${opts.prompt}`
     : opts.prompt;
 
-  // Flags only — no prompt text in CLI args (Windows cmd.exe mangles special chars)
-  const flagArgs = [
+  const args = [
+    '-p', fullPrompt,
     '--output-format', 'stream-json',
     '--max-turns', String(opts.maxTurns || 50),
     '--verbose',
@@ -102,46 +103,32 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
   ];
 
   if (opts.model) {
-    flagArgs.push('--model', opts.model);
+    args.push('--model', opts.model);
   }
 
   if (opts.systemPrompt) {
-    flagArgs.push('--system-prompt', opts.systemPrompt);
+    args.push('--system-prompt', opts.systemPrompt);
   }
 
   if (opts.allowedTools?.length) {
-    flagArgs.push('--allowedTools', ...opts.allowedTools);
+    args.push('--allowedTools', ...opts.allowedTools);
   }
 
   if (opts.disallowedTools?.length) {
-    flagArgs.push('--disallowedTools', ...opts.disallowedTools);
+    args.push('--disallowedTools', ...opts.disallowedTools);
   }
 
   const startTime = Date.now();
 
-  // Windows: spawn cmd.exe /c claude with prompt piped via stdin.
-  // cmd.exe mangles special chars (quotes, {}, %, etc.) in arguments,
-  // so we only pass flags as args and pipe the prompt via stdin.
-  // Claude -p reads from stdin when no positional prompt arg is given.
-  // Unix: pass prompt as -p argument directly (no shell issues).
-  const child = isWindows
-    ? spawn(process.env.ComSpec || 'cmd.exe', ['/c', 'claude', '-p', ...flagArgs], {
-        env,
-        cwd: opts.cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-    : spawn('claude', ['-p', fullPrompt, ...flagArgs], {
-        env,
-        cwd: opts.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: true,
-      });
-
-  // On Windows, pipe the prompt via stdin
-  if (isWindows && child.stdin) {
-    child.stdin.write(fullPrompt);
-    child.stdin.end();
-  }
+  // cross-spawn handles Windows .cmd resolution and argument escaping
+  // automatically. On Unix it behaves identically to child_process.spawn.
+  const child = crossSpawn('claude', args, {
+    env,
+    cwd: opts.cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // Unix: detached for process group kills
+    ...(isWindows ? {} : { detached: true }),
+  });
 
   emitter.child = child;
   activeChildren.add(child);
@@ -154,7 +141,7 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
   // Raw pipe chunks can split across line boundaries, so we buffer
   // and only emit complete lines. This lets the renderer parse each
   // event as valid JSON.
-  child.stdout.on('data', (chunk: Buffer) => {
+  child.stdout!.on('data', (chunk: Buffer) => {
     const text = chunk.toString();
     stdout += text;
     stdoutLineBuffer += text;
@@ -171,7 +158,7 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
     }
   });
 
-  child.stderr.on('data', (chunk: Buffer) => {
+  child.stderr!.on('data', (chunk: Buffer) => {
     const text = chunk.toString();
     stderr += text;
     emitter.emit('stderr', text);

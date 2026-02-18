@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import crossSpawn from 'cross-spawn';
 import { spawn as spawnProcess } from 'node:child_process';
 import chalk from 'chalk';
 
@@ -413,35 +414,18 @@ Rules:
         }
       }, 3000);
 
-      const flagArgs = [
+      // cross-spawn handles Windows .cmd resolution and argument escaping
+      const child = crossSpawn('claude', [
+        '-p', refinementPrompt,
         '--output-format', 'stream-json',
         '--verbose',
         '--max-turns', '1',
         '--dangerously-skip-permissions',
-      ];
-
-      // Windows: spawn cmd.exe /c claude with prompt piped via stdin.
-      // cmd.exe mangles special chars (quotes, {}, %) in arguments,
-      // so we pipe the prompt via stdin instead. Claude -p reads stdin
-      // when no positional prompt arg is given.
-      // Unix: pass prompt as -p argument directly (no shell issues).
-      const child = isWindows
-        ? spawnProcess(process.env.ComSpec || 'cmd.exe', ['/c', 'claude', '-p', ...flagArgs], {
-            env,
-            cwd: process.cwd(),
-            stdio: ['pipe', 'pipe', 'pipe'],
-          })
-        : spawnProcess('claude', ['-p', refinementPrompt, ...flagArgs], {
-            env,
-            cwd: process.cwd(),
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
-
-      // On Windows, pipe the prompt via stdin
-      if (isWindows && child.stdin) {
-        child.stdin.write(refinementPrompt);
-        child.stdin.end();
-      }
+      ], {
+        env,
+        cwd: process.cwd(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
 
       let stdout = '';
       let stderr = '';
