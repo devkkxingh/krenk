@@ -93,8 +93,8 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
     ? `${opts.context}\n\n---\n\nYour current task:\n${opts.prompt}`
     : opts.prompt;
 
-  const args = [
-    '-p', fullPrompt,
+  // Flags only — no prompt text in CLI args (Windows cmd.exe mangles special chars)
+  const flagArgs = [
     '--output-format', 'stream-json',
     '--max-turns', String(opts.maxTurns || 50),
     '--verbose',
@@ -102,39 +102,46 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
   ];
 
   if (opts.model) {
-    args.push('--model', opts.model);
+    flagArgs.push('--model', opts.model);
   }
 
   if (opts.systemPrompt) {
-    args.push('--system-prompt', opts.systemPrompt);
+    flagArgs.push('--system-prompt', opts.systemPrompt);
   }
 
   if (opts.allowedTools?.length) {
-    args.push('--allowedTools', ...opts.allowedTools);
+    flagArgs.push('--allowedTools', ...opts.allowedTools);
   }
 
   if (opts.disallowedTools?.length) {
-    args.push('--disallowedTools', ...opts.disallowedTools);
+    flagArgs.push('--disallowedTools', ...opts.disallowedTools);
   }
 
   const startTime = Date.now();
 
-  // Windows: spawn cmd.exe directly with /c to run claude.cmd
-  // This is the most reliable way — shell:true and binary resolution both fail
-  // on some Windows setups. Spawning cmd.exe /c always works.
-  // Unix: spawn claude directly with detached process group.
+  // Windows: spawn cmd.exe /c claude with prompt piped via stdin.
+  // cmd.exe mangles special chars (quotes, {}, %, etc.) in arguments,
+  // so we only pass flags as args and pipe the prompt via stdin.
+  // Claude -p reads from stdin when no positional prompt arg is given.
+  // Unix: pass prompt as -p argument directly (no shell issues).
   const child = isWindows
-    ? spawn(process.env.ComSpec || 'cmd.exe', ['/c', 'claude', ...args], {
+    ? spawn(process.env.ComSpec || 'cmd.exe', ['/c', 'claude', '-p', ...flagArgs], {
         env,
         cwd: opts.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       })
-    : spawn('claude', args, {
+    : spawn('claude', ['-p', fullPrompt, ...flagArgs], {
         env,
         cwd: opts.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
       });
+
+  // On Windows, pipe the prompt via stdin
+  if (isWindows && child.stdin) {
+    child.stdin.write(fullPrompt);
+    child.stdin.end();
+  }
 
   emitter.child = child;
   activeChildren.add(child);
