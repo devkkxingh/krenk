@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { program } from 'commander';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { runCommand } from './commands/run.js';
 import { planCommand } from './commands/plan.js';
 import { buildCommand } from './commands/build.js';
@@ -10,12 +13,15 @@ import { statusCommand } from './commands/status.js';
 import { resumeCommand } from './commands/resume.js';
 import { startInteractiveSession } from './ui/interactive.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+
 program
   .name('krenk')
   .description(
     'Multi-agent software engineering orchestrator powered by Claude Code'
   )
-  .version('0.1.0')
+  .version(pkg.version)
   .option('--resume', 'Resume a previous interrupted or failed run')
   .action(async (opts: { resume?: boolean }) => {
     if (opts.resume) {
