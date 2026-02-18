@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
+const isWindows = process.platform === 'win32';
+
 export interface SpawnOptions {
   role: string;
   prompt: string;
@@ -45,25 +47,37 @@ export function killAllAgents(): void {
 function forceKillChild(child: ChildProcess): void {
   if (child.killed) return;
 
-  // Try killing the process group first (kills child + anything it spawned)
-  if (child.pid) {
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
-      // Process group kill failed, fall back to direct kill
-      try { child.kill('SIGTERM'); } catch { /* already dead */ }
+  if (isWindows) {
+    // Windows: use taskkill to kill process tree
+    if (child.pid) {
+      try {
+        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      } catch {
+        try { child.kill(); } catch { /* already dead */ }
+      }
+    } else {
+      try { child.kill(); } catch { /* already dead */ }
     }
   } else {
-    try { child.kill('SIGTERM'); } catch { /* already dead */ }
-  }
-
-  // Force kill after 3 seconds if still alive
-  setTimeout(() => {
-    if (!child.killed && child.pid) {
-      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already dead */ }
-      try { child.kill('SIGKILL'); } catch { /* already dead */ }
+    // Unix: kill process group
+    if (child.pid) {
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        try { child.kill('SIGTERM'); } catch { /* already dead */ }
+      }
+    } else {
+      try { child.kill('SIGTERM'); } catch { /* already dead */ }
     }
-  }, 3000).unref();
+
+    // Force kill after 3 seconds if still alive
+    setTimeout(() => {
+      if (!child.killed && child.pid) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already dead */ }
+        try { child.kill('SIGKILL'); } catch { /* already dead */ }
+      }
+    }, 3000).unref();
+  }
 }
 
 export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
@@ -109,7 +123,9 @@ export function spawnClaudeAgent(opts: SpawnOptions): AgentEmitter {
     env,
     cwd: opts.cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true, // Create process group so we can kill the whole tree
+    // Windows: shell=true resolves .cmd/.bat extensions (e.g. claude.cmd from npm)
+    // Unix: detached=true creates process group for clean tree kills
+    ...(isWindows ? { shell: true } : { detached: true }),
   });
 
   emitter.child = child;

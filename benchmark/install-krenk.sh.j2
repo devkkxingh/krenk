@@ -1,0 +1,21 @@
+#!/bin/bash
+# Install Krenk and its dependencies inside a Harbor container
+set -e
+
+# Install Node.js 20
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
+apt-get install -y -qq nodejs > /dev/null 2>&1
+
+# Install Claude Code CLI
+npm install -g @anthropic-ai/claude-code > /dev/null 2>&1
+
+# Install Krenk
+{% if version %}
+npm install -g krenk@{{ version }} > /dev/null 2>&1
+{% else %}
+npm install -g krenk > /dev/null 2>&1
+{% endif %}
+
+# Verify
+echo "Node: $(node --version)"
+echo "Krenk: $(krenk --version)"
