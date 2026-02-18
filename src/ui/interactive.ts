@@ -516,23 +516,42 @@ Rules:
       .replace(/\s*```$/i, '')
       .trim();
 
-    const parsed = JSON.parse(responseText);
+    // Try direct JSON parse first
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = JSON.parse(responseText);
+    } catch {
+      // Claude sometimes wraps JSON in prose like "Sure! Here's the JSON: {...}"
+      // Try to extract the JSON object from within the response text
+      const jsonStart = responseText.indexOf('{');
+      const jsonEnd = responseText.lastIndexOf('}');
+      if (jsonStart !== -1 && jsonEnd > jsonStart) {
+        try {
+          parsed = JSON.parse(responseText.slice(jsonStart, jsonEnd + 1));
+        } catch {
+          // Still not valid JSON
+        }
+      }
+    }
+
+    if (!parsed) {
+      throw new Error('Claude did not return valid JSON');
+    }
 
     return {
-      title: parsed.title || rawTask,
-      requirements: Array.isArray(parsed.requirements) ? parsed.requirements : [],
-      techStack: Array.isArray(parsed.techStack) ? parsed.techStack : [],
-      fullPrompt: parsed.fullPrompt || rawTask,
+      title: (parsed.title as string) || rawTask,
+      requirements: Array.isArray(parsed.requirements) ? parsed.requirements as string[] : [],
+      techStack: Array.isArray(parsed.techStack) ? parsed.techStack as string[] : [],
+      fullPrompt: (parsed.fullPrompt as string) || rawTask,
     };
   } catch (err: unknown) {
-    // Log the error so users can debug (especially on Windows)
+    // Log the error so users can debug
     const msg = err instanceof Error ? err.message : String(err);
     if (spinner) {
       spinner.warn('Claude refinement failed, using local fallback');
     }
-    console.log(chalk.yellow(`  Warning: Claude CLI failed: ${msg}`));
-    console.log(chalk.dim('  Make sure "claude" is installed and available in your PATH.'));
-    console.log(chalk.dim('  On Windows, try running: npx @anthropic-ai/claude-code --version\n'));
+    console.log(chalk.yellow(`  Warning: prompt refinement issue: ${msg}`));
+    console.log(chalk.dim('  Using local fallback refinement.\n'));
     return refinePromptLocal(rawTask, answers, roles);
   }
 }
