@@ -1,28 +1,8 @@
 import * as readline from 'node:readline';
-import { spawn as spawnProcess, execFileSync } from 'node:child_process';
-import { writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { spawn as spawnProcess } from 'node:child_process';
 import chalk from 'chalk';
 
 const isWindows = process.platform === 'win32';
-
-/** Resolve full path to claude binary (cached) */
-let _claudeBin: string | null = null;
-function getClaudeBin(): string {
-  if (_claudeBin) return _claudeBin;
-  try {
-    const cmd = isWindows ? 'where claude' : 'which claude';
-    const result = execFileSync(isWindows ? 'cmd' : 'sh',
-      isWindows ? ['/c', cmd] : ['-c', cmd],
-      { encoding: 'utf-8', timeout: 5000 }
-    ).trim();
-    _claudeBin = result.split('\n')[0].trim();
-    return _claudeBin;
-  } catch {
-    return 'claude';
-  }
-}
 
 import gradient from 'gradient-string';
 import figlet from 'figlet';
@@ -433,32 +413,28 @@ Rules:
         }
       }, 3000);
 
-      // On Windows, write prompt to temp file to avoid shell quoting issues
-      const tempFiles: string[] = [];
-      let promptArgs: string[];
-      if (isWindows) {
-        const tempDir = join(tmpdir(), 'krenk-prompts');
-        mkdirSync(tempDir, { recursive: true });
-        const pFile = join(tempDir, `refine-${Date.now()}.txt`);
-        writeFileSync(pFile, refinementPrompt, 'utf-8');
-        promptArgs = ['-p', `@${pFile}`];
-        tempFiles.push(pFile);
-      } else {
-        promptArgs = ['-p', refinementPrompt];
-      }
-
-      const child = spawnProcess(getClaudeBin(), [
-        ...promptArgs,
+      // On Windows: pipe prompt via stdin + shell:true to find claude.cmd
+      // On Unix: pass prompt as -p argument directly
+      const spawnArgs = [
+        ...(isWindows ? [] : ['-p', refinementPrompt]),
         '--output-format', 'stream-json',
         '--verbose',
         '--max-turns', '1',
         '--dangerously-skip-permissions',
-      ], {
+      ];
+
+      const child = spawnProcess('claude', spawnArgs, {
         env,
         cwd: process.cwd(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-        ...(isWindows ? {} : {}),
+        stdio: [isWindows ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+        ...(isWindows ? { shell: true } : {}),
       });
+
+      // On Windows, write prompt to stdin then close
+      if (isWindows && child.stdin) {
+        child.stdin.write(refinementPrompt);
+        child.stdin.end();
+      }
 
       let stdout = '';
       let stderr = '';
@@ -502,7 +478,6 @@ Rules:
       child.on('close', (code) => {
         clearInterval(phaseTimer);
         clearTimeout(timeout);
-        for (const f of tempFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
         if (code === 0 && stdout.trim()) {
           resolve(stdout);
         } else {
@@ -513,7 +488,6 @@ Rules:
       child.on('error', (err) => {
         clearInterval(phaseTimer);
         clearTimeout(timeout);
-        for (const f of tempFiles) { try { unlinkSync(f); } catch { /* ignore */ } }
         reject(err);
       });
     });
